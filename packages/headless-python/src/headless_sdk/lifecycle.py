@@ -346,7 +346,7 @@ def launch(
     *,
     executable: str | os.PathLike[str] | None = None,
     socket_path: str | None = None,
-    presentation: LaunchPresentation = "background",
+    presentation: LaunchPresentation | None = None,
     allow: Sequence[str] = (),
     environment: Mapping[str, str] | None = None,
     startup_timeout: float = _DEFAULT_STARTUP_TIMEOUT,
@@ -374,18 +374,24 @@ def launch(
         default_socket_path(selected_environment) if socket_path is None else socket_path
     )
     validate_socket_location(selected_socket)
-    if not isinstance(presentation, str) or presentation not in LAUNCH_PRESENTATIONS:
+    if presentation is not None and (
+        not isinstance(presentation, str) or presentation not in LAUNCH_PRESENTATIONS
+    ):
         raise ValidationError(f"presentation must be one of {', '.join(LAUNCH_PRESENTATIONS)}")
     if isinstance(allow, (str, bytes)) or not isinstance(allow, Sequence):
         raise ValidationError("allow must be a sequence of host patterns")
     presentation_flags = {f"--{value}" for value in LAUNCH_PRESENTATIONS}
     argv = cast(list[str], list(LOCAL_LIFECYCLE["launch"]["argv"]))
     existing_flags = [argument for argument in argv if argument in presentation_flags]
-    if len(existing_flags) != 1:
+    if existing_flags:
         raise ValidationError("generated launch argv has an invalid presentation flag")
-    argv = [
-        f"--{presentation}" if argument in presentation_flags else argument for argument in argv
+    supervised_indexes = [
+        index for index, argument in enumerate(argv) if argument == "--supervised"
     ]
+    if len(supervised_indexes) != 1:
+        raise ValidationError("generated launch argv has an invalid supervised flag")
+    if presentation is not None:
+        argv.insert(supervised_indexes[0], f"--{presentation}")
     allow_definition = next(
         (option for option in LOCAL_LIFECYCLE["launch"]["options"] if option["name"] == "allow"),
         None,
@@ -537,7 +543,7 @@ async def alaunch(
     *,
     executable: str | os.PathLike[str] | None = None,
     socket_path: str | None = None,
-    presentation: LaunchPresentation = "background",
+    presentation: LaunchPresentation | None = None,
     allow: Sequence[str] = (),
     environment: Mapping[str, str] | None = None,
     startup_timeout: float = _DEFAULT_STARTUP_TIMEOUT,

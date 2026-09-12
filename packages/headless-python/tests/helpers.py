@@ -139,9 +139,12 @@ import time
 
 PROTOCOL_VERSION = {PROTOCOL_VERSION!r}
 mode = os.environ.get("HEADLESS_TEST_MODE", "owned")
-expected_presentation = os.environ.get("HEADLESS_TEST_PRESENTATION", "background")
-expected = ["start", "--" + expected_presentation, "--supervised"]
-if sys.argv[1:4] != expected:
+expected_presentation = os.environ.get("HEADLESS_TEST_PRESENTATION")
+expected = ["start"]
+if expected_presentation:
+    expected.append("--" + expected_presentation)
+expected.append("--supervised")
+if sys.argv[1:1 + len(expected)] != expected:
     sys.exit(64)
 socket_path = os.environ["HEADLESS_SOCKET"]
 commands = json.loads(os.environ["HEADLESS_TEST_COMMANDS"])

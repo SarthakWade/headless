@@ -68,15 +68,17 @@ state.
 ```python
 from headless_sdk import launch
 
-with launch(presentation="background", allow=["example.com"]) as host:
+with launch(allow=["example.com"]) as host:
     print(host.client.host_status["pid"])
 ```
 
-`launch()` runs `headless start --background --supervised`, keeps the owner pipe open,
-and grants ownership only after the startup response PID matches the connected host
-PID. Closing the wrapper terminates and reaps only that owned launcher. It cannot
-adopt or stop a concurrently started shared host. Use `presentation="foreground"`
-to request the foreground app behavior. Custom executable paths must be absolute.
+`launch()` runs `headless start --supervised`, keeps the owner pipe open, and grants
+ownership only after the startup response PID matches the connected host PID.
+Closing the wrapper terminates and reaps only that owned launcher. It cannot adopt
+or stop a concurrently started shared host. Omit `presentation` to preserve the
+platform default. On macOS, pass `presentation="background"` or
+`presentation="foreground"` for an explicit override. Custom executable paths must
+be absolute.
 
 ## Authentication and untrusted data
 

@@ -67,7 +67,7 @@ def test_supervised_launch_owns_only_exact_matching_host(tmp_path: Path) -> None
     }
     host = launch(executable=executable, socket_path=socket_path, environment=environment())
     try:
-        assert LOCAL_LIFECYCLE["launch"]["argv"] == ["start", "--background", "--supervised"]
+        assert LOCAL_LIFECYCLE["launch"]["argv"] == ["start", "--supervised"]
         assert host.pid == host.client.host_status["pid"]
         assert host.launcher_pid > 0
         assert signal.getsignal(signal.SIGINT) == signal_handlers[signal.SIGINT]
