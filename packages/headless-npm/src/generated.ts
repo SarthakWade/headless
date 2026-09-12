@@ -3406,4 +3406,3 @@ export abstract class GeneratedSessionCommandClient {
   }
 
 }
-

@@ -262,7 +262,7 @@ lines.push(
 emitMethods(schema.commands.filter((command) => command.scope === "session"));
 lines.push("}", "");
 
-const output = `${lines.join("\n")}\n`;
+const output = lines.join("\n");
 if (process.argv.includes("--check")) {
   const existing = await readFile(outputPath, "utf8").catch(() => "");
   if (existing !== output) throw new Error("generated SDK declarations are stale; run npm run generate");
