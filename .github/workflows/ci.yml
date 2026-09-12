@@ -80,7 +80,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile --filter @lockintime/headless
       - run: pnpm --filter @lockintime/headless test
@@ -144,10 +144,23 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @lockintime/headless
       - name: Build app
         run: ./apps/headless/build.sh
       - name: Protocol and security tests
         run: ./apps/headless/test.sh
+      - name: Build TypeScript SDK
+        run: pnpm --filter @lockintime/headless build
+      - name: Swift CLI to TypeScript SDK integration
+        env:
+          HEADLESS_TEST_CLI: ${{ github.workspace }}/apps/headless/Headless.app/Contents/Resources/bin/headless
+          HEADLESS_TEST_HOST: ${{ github.workspace }}/apps/headless/Headless.app/Contents/MacOS/Headless
+        run: node packages/headless-npm/test/macos-swift-integration.mjs
 
   macos-e2e:
     name: macOS E2E (WKWebView)
