@@ -103,7 +103,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile --filter @lockintime/headless
       - run: pnpm --filter @lockintime/headless test
@@ -416,10 +416,13 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @lockintime/headless
       - name: Publish verified launcher
         working-directory: packages/headless-npm
         env:

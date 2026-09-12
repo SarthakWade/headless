@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,8 +18,10 @@ import {
   checksumFromManifest,
   defaultCacheRoot,
   ensureInstalled,
+  InstallCancelledError,
   InstallError,
   platformRelease,
+  run,
   validateArchiveEntries,
 } from "../lib/installer.mjs";
 
@@ -58,7 +68,9 @@ before(async () => {
     if (request.url.endsWith("/SHA256SUMS")) {
       response.end(servedManifest);
     } else if (request.url.endsWith(`/${asset}`)) {
-      response.end(archiveBytes);
+      response.setHeader("transfer-encoding", "chunked");
+      response.write(archiveBytes.subarray(0, Math.ceil(archiveBytes.length / 2)));
+      response.end(archiveBytes.subarray(Math.ceil(archiveBytes.length / 2)));
     } else {
       response.statusCode = 404;
       response.end();
@@ -152,4 +164,122 @@ test("downloads, verifies, installs, and reuses the cached release", async () =>
   const second = await ensureInstalled(options);
   assert.equal(second.directory, first.directory);
   assert.equal(requestCount, afterFirst, "a valid cache entry must not redownload");
+});
+
+test("cancellation interrupts lock waits without deleting another installer's lock", async () => {
+  const cacheRoot = join(root, "cancel-lock-cache");
+  const lockPath = join(cacheRoot, `v${version}`, "linux-amd64.lock");
+  mkdirSync(lockPath, { recursive: true, mode: 0o700 });
+  const controller = new AbortController();
+  const pending = ensureInstalled({
+    version,
+    platform: "linux",
+    architecture: "x64",
+    cacheRoot,
+    signal: controller.signal,
+  });
+  setTimeout(() => controller.abort(), 25);
+  await assert.rejects(pending, InstallCancelledError);
+  assert.equal(existsSync(lockPath), true);
+});
+
+test("cancellation aborts release fetches and rolls back owned staging", async () => {
+  const cacheRoot = join(root, "cancel-fetch-cache");
+  const controller = new AbortController();
+  let fetchStarted;
+  const started = new Promise((resolvePromise) => { fetchStarted = resolvePromise; });
+  const fetchImpl = async (_url, options) => {
+    fetchStarted();
+    return new Promise((_resolve, rejectPromise) => {
+      options.signal.addEventListener("abort", () => rejectPromise(options.signal.reason), { once: true });
+    });
+  };
+  const pending = ensureInstalled({
+    version,
+    platform: "linux",
+    architecture: "x64",
+    cacheRoot,
+    releaseBaseURL: `https://github.com/${version}`,
+    fetchImpl,
+    signal: controller.signal,
+  });
+  await started;
+  controller.abort();
+  await assert.rejects(pending, InstallCancelledError);
+  assert.equal(existsSync(join(cacheRoot, `v${version}`, "linux-amd64")), false);
+  assert.equal(existsSync(join(cacheRoot, `v${version}`, "linux-amd64.lock")), false);
+});
+
+test("cancellation interrupts asset streaming and removes partial downloads", async () => {
+  const cacheRoot = join(root, "cancel-stream-cache");
+  const controller = new AbortController();
+  let request = 0;
+  let assetStarted;
+  const started = new Promise((resolvePromise) => { assetStarted = resolvePromise; });
+  const fetchImpl = async (_url, options) => {
+    request += 1;
+    if (request === 1) {
+      return new Response(`${"0".repeat(64)}  ${asset}\n`);
+    }
+    return new Response(new ReadableStream({
+      start(stream) {
+        stream.enqueue(new Uint8Array([1, 2, 3]));
+        assetStarted();
+        options.signal.addEventListener("abort", () => stream.error(options.signal.reason), { once: true });
+      },
+    }));
+  };
+  const pending = ensureInstalled({
+    version,
+    platform: "linux",
+    architecture: "x64",
+    cacheRoot,
+    releaseBaseURL: `https://github.com/${version}`,
+    fetchImpl,
+    signal: controller.signal,
+  });
+  await started;
+  controller.abort();
+  await assert.rejects(pending, InstallCancelledError);
+  assert.equal(existsSync(join(cacheRoot, `v${version}`, "linux-amd64")), false);
+  assert.equal(existsSync(join(cacheRoot, `v${version}`, "linux-amd64.lock")), false);
+});
+
+test("cancellation terminates and reaps installer child processes", async () => {
+  const pidFile = join(root, "cancelled-child.pid");
+  const controller = new AbortController();
+  const pending = run(process.execPath, [
+    "--eval",
+    `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+  ], { signal: controller.signal });
+  for (let attempt = 0; attempt < 100 && !existsSync(pidFile); attempt += 1) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  assert.equal(existsSync(pidFile), true);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  controller.abort();
+  await assert.rejects(pending, InstallCancelledError);
+  assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+test("installer child output is bounded and the child is reaped", async () => {
+  const pidFile = join(root, "oversized-output-child.pid");
+  const pending = run(process.execPath, [
+    "--eval",
+    `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stdout.write('x'.repeat(2 * 1024 * 1024)); setInterval(() => {}, 1000);`,
+  ]);
+  await assert.rejects(pending, /stdout exceeded/);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+test("installer subprocess timeout terminates and reaps a silent child", async () => {
+  const pidFile = join(root, "timed-out-child.pid");
+  const pending = run(process.execPath, [
+    "--eval",
+    `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+  ], { timeoutMilliseconds: 250 });
+  await assert.rejects(pending, /timed out after 250 ms/);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  assert.throws(() => process.kill(pid, 0), /ESRCH/);
 });
