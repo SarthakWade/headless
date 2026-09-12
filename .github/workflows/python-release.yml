@@ -1,0 +1,102 @@
+name: Publish Python SDK
+
+on:
+  push:
+    tags:
+      - "python-v*"
+  pull_request:
+    paths:
+      - ".github/workflows/python-release.yml"
+      - "packages/headless-python/**"
+      - "sdk/protocol-fixtures.json"
+      - "sdk/protocol-schema.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Verify and build Python SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # v7.0.1 at this verified commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      # v6.3.0 at this verified commit.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/headless-python/pyproject.toml
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/python-v')
+        working-directory: packages/headless-python
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "$RELEASE_TAG" = "python-v$package_version"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || {
+            echo "Python SDK releases must point to a commit already merged into main" >&2
+            exit 64
+          }
+      - name: Install development tools
+        working-directory: packages/headless-python
+        run: python -m pip install -e '.[dev]'
+      - name: Verify source and tests
+        working-directory: packages/headless-python
+        run: |
+          python scripts/generate.py --check
+          ruff check .
+          ruff format --check .
+          mypy
+          pytest
+      - name: Build exact distributions
+        working-directory: packages/headless-python
+        run: |
+          python -m build
+          python scripts/verify_package.py
+      - name: Install and import built distributions
+        working-directory: packages/headless-python
+        run: |
+          python -m venv "$RUNNER_TEMP/python-wheel"
+          "$RUNNER_TEMP/python-wheel/bin/python" -m pip install --no-deps dist/*.whl
+          "$RUNNER_TEMP/python-wheel/bin/python" -c 'import headless_sdk; print(headless_sdk.__version__)'
+          python -m venv "$RUNNER_TEMP/python-sdist"
+          "$RUNNER_TEMP/python-sdist/bin/python" -m pip install --no-deps dist/*.tar.gz
+          "$RUNNER_TEMP/python-sdist/bin/python" -c 'import headless_sdk; print(headless_sdk.__version__)'
+      # v7.0.1 at this verified commit.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: python-distributions
+          path: packages/headless-python/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/python-v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/lockintime-headless/
+    permissions:
+      id-token: write
+    steps:
+      # v8 at this verified commit; every action in the OIDC-enabled job is immutable.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: python-distributions
+          path: dist
+      # release/v1 at this verified commit; keep OIDC authority immutable.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
