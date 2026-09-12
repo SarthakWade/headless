@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lockintime-headless"
+version = "0.1.0"
+description = "Typed local Python SDK for the Headless agent browser"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "LockInTime" }]
+keywords = ["browser-automation", "headless-browser", "sdk"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/LockInTime/headless"
+Issues = "https://github.com/LockInTime/headless/issues"
+Repository = "https://github.com/LockInTime/headless.git"
+Security = "https://github.com/LockInTime/headless/security/policy"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "mypy>=1.15,<2",
+  "pytest>=8.3,<10",
+  "ruff>=0.11,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/headless_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+  "/src/headless_sdk",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests/type_contract.py"]
+warn_unreachable = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["dist", "src/headless_sdk/generated.py"]
+
+[tool.ruff.lint]
+select = ["A", "ASYNC", "B", "C4", "E", "F", "I", "N", "PERF", "PIE", "PL", "RUF", "SIM", "UP", "W"]
+ignore = ["PLC0415"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/generate.py" = ["PERF401"]
+"src/headless_sdk/__init__.py" = ["A004"]
+"src/headless_sdk/_protocol.py" = ["PLR0911", "PLR0912"]
+"src/headless_sdk/_transport.py" = ["A004", "ASYNC109", "PLR0912", "PLR0913", "PLR0915", "PLR0917"]
+"src/headless_sdk/client.py" = ["ASYNC109"]
+"src/headless_sdk/errors.py" = ["A001", "N818", "PLR0913"]
+"src/headless_sdk/lifecycle.py" = ["ASYNC109", "PLR0912", "PLR0913", "PLR0915"]
+"tests/**" = ["PLR0911", "PLR2004", "S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

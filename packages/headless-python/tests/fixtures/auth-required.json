@@ -1,0 +1,53 @@
+{
+  "valid": {
+    "challenge": "11111111-1111-4111-8111-111111111111",
+    "origin": "https://example.com",
+    "detection": "password-field",
+    "accounts": [
+      {
+        "alias": "work",
+        "username": "person@example.com"
+      }
+    ],
+    "expiresInSeconds": 300,
+    "userPresenceRequired": true,
+    "credentialUseAvailable": true,
+    "vaultAvailable": true,
+    "vaultStatus": "available",
+    "untrustedContent": true,
+    "originalActionReplayed": false
+  },
+  "invalid": [
+    {
+      "name": "missing challenge",
+      "details": {
+        "origin": "https://example.com",
+        "detection": "password-field",
+        "accounts": [],
+        "expiresInSeconds": 300,
+        "userPresenceRequired": true,
+        "credentialUseAvailable": true,
+        "vaultAvailable": true,
+        "vaultStatus": "available",
+        "untrustedContent": true,
+        "originalActionReplayed": false
+      }
+    },
+    {
+      "name": "invalid accounts",
+      "details": {
+        "challenge": "11111111-1111-4111-8111-111111111111",
+        "origin": "https://example.com",
+        "detection": "password-field",
+        "accounts": "work",
+        "expiresInSeconds": 300,
+        "userPresenceRequired": true,
+        "credentialUseAvailable": true,
+        "vaultAvailable": true,
+        "vaultStatus": "available",
+        "untrustedContent": true,
+        "originalActionReplayed": false
+      }
+    }
+  ]
+}

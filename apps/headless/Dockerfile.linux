@@ -56,7 +56,7 @@ CMD ["/usr/local/bin/headless", "help"]
 FROM runtime-base AS test
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends busybox expect gnome-keyring \
+    && apt-get install -y --no-install-recommends busybox expect gnome-keyring python3 \
     && rm -rf /var/lib/apt/lists/*
 RUN install -d -m 0700 -o headless -g headless /run/user/10001
 COPY Tests/Fixtures /opt/headless/fixtures

@@ -37,6 +37,12 @@ trap restore_evidence_owner EXIT INT TERM
 docker run --rm --name headless-p1-e2e --shm-size=1g --cap-add=SYS_ADMIN \
   -e HEADLESS_EVIDENCE_DIR=/evidence -v "$EVIDENCE_DIR:/evidence" \
   headless-p1-test /opt/headless/linux-e2e.sh
+docker run --rm --name headless-python-sdk-integration --shm-size=1g --cap-add=SYS_ADMIN \
+  -e PYTHONPATH=/opt/python-sdk/src \
+  -e HEADLESS_TEST_CLI=/usr/local/bin/headless \
+  -e HEADLESS_TEST_HOST=/usr/local/bin/headless-host \
+  -v "$PWD/../../packages/headless-python:/opt/python-sdk:ro" \
+  headless-p1-test python3 /opt/python-sdk/tests/swift_integration.py
 restore_evidence_owner
 trap - EXIT INT TERM
 (
