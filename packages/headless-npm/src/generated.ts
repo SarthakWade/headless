@@ -7,7 +7,7 @@ export type Untrusted<T> = Readonly<{ readonly untrustedContent: true; readonly 
 export const PROTOCOL_VERSION = "0.5" as const;
 export const PROTOCOL_SCHEMA_VERSION = 1 as const;
 export const MAXIMUM_MESSAGE_BYTES = 1048576 as const;
-export const PROTOCOL_SCHEMA_SHA256 = "c199f18185cfa05b5c16c9140e48e1f588c61188b5f2ea6fa58eea2ddc57dcbf" as const;
+export const PROTOCOL_SCHEMA_SHA256 = "882634187c7ef02ec4ed51fff0e747114eadeff308c10bb9b3274b3630fad11d" as const;
 export const PROTOCOL_FIXTURES_SHA256 = "0b51ffaa2d3e3aaf0c32adcfeb02c180dcbe44face0d49e1c332b69f403ae062" as const;
 export const RESPONSE_ADDITIONAL_PROPERTIES = true as const;
 export const MAXIMUM_COMMAND_TIMEOUT_MS = 125000 as const;
@@ -22,7 +22,6 @@ export const LOCAL_LIFECYCLE = {
   "launch": {
     "argv": [
       "start",
-      "--background",
       "--supervised"
     ],
     "command": "start",

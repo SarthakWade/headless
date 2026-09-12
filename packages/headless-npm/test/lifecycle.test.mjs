@@ -46,9 +46,15 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname } from "node:path";
 
-const expectedPresentation = process.env.HEADLESS_TEST_EXPECT_PRESENTATION ?? "background";
-const expected = ["start", "--" + expectedPresentation, "--supervised"];
-if (JSON.stringify(process.argv.slice(2, 5)) !== JSON.stringify(expected)) process.exit(64);
+const expectedPresentation = process.env.HEADLESS_TEST_EXPECT_PRESENTATION;
+const expected = [
+  "start",
+  ...(expectedPresentation ? ["--" + expectedPresentation] : []),
+  "--supervised",
+];
+if (JSON.stringify(process.argv.slice(2, 2 + expected.length)) !== JSON.stringify(expected)) {
+  process.exit(64);
+}
 const mode = process.env.HEADLESS_TEST_MODE ?? "owned";
 const socketPath = process.env.HEADLESS_SOCKET;
 const commands = JSON.parse(process.env.HEADLESS_TEST_COMMANDS);
@@ -158,7 +164,7 @@ test("supervised launch uses generated argv and owns only the matching host", as
     socketPath,
     environment: launchEnvironment(),
   });
-  assert.deepEqual(LOCAL_LIFECYCLE.launch.argv, ["start", "--background", "--supervised"]);
+  assert.deepEqual(LOCAL_LIFECYCLE.launch.argv, ["start", "--supervised"]);
   assert.equal(host.client.hostStatus.pid > 0, true);
   assert.deepEqual(
     { SIGINT: process.listenerCount("SIGINT"), SIGTERM: process.listenerCount("SIGTERM") },

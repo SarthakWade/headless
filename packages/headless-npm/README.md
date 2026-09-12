@@ -50,10 +50,11 @@ that trust marker when sending page content to an agent or another system.
 ## Supervised host
 
 Use `launch()` when this process must own a new host. It invokes the installed
-CLI with `headless start --background --supervised`, keeps the ownership pipe
-open, verifies that the startup response and socket report the same host PID,
-and reaps only that launcher during disposal. It fails rather than claiming an
-already-running shared host.
+CLI with `headless start --supervised`, keeps the ownership pipe open, verifies
+that the startup response and socket report the same host PID, and reaps only
+that launcher during disposal. Omit `presentation` to preserve the platform
+default, or explicitly select `background` or `foreground` on macOS. Launch
+fails rather than claiming an already-running shared host.
 
 ```ts
 import { launch } from "@lockintime/headless";

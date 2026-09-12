@@ -337,19 +337,23 @@ export async function launch(options: LaunchOptions = {}): Promise<HeadlessHost>
     : AbortSignal.any([options.signal, deadlineSignal]);
   const socketPath = options.socketPath ?? defaultSocketPath(options.environment ?? process.env);
   validateSocketLocation(socketPath);
-  const presentation = options.presentation ?? "background";
-  if (!(LAUNCH_PRESENTATIONS as readonly string[]).includes(presentation)) {
+  const presentation = options.presentation;
+  if (presentation !== undefined
+    && !(LAUNCH_PRESENTATIONS as readonly string[]).includes(presentation)) {
     throw new ValidationError(`presentation must be one of ${LAUNCH_PRESENTATIONS.join(", ")}`);
   }
   const presentationFlags = new Set(LAUNCH_PRESENTATIONS.map((value) => `--${value}`));
   const generatedPresentationFlags = LOCAL_LIFECYCLE.launch.argv
     .filter((argument) => presentationFlags.has(argument));
-  if (generatedPresentationFlags.length !== 1) {
+  if (generatedPresentationFlags.length !== 0) {
     throw new ValidationError("generated launch argv has an invalid presentation flag");
   }
-  const argumentsList: string[] = LOCAL_LIFECYCLE.launch.argv.map((argument) => (
-    presentationFlags.has(argument) ? `--${presentation}` : argument
-  ));
+  const argumentsList: string[] = [...LOCAL_LIFECYCLE.launch.argv];
+  const supervisedIndex = argumentsList.indexOf("--supervised");
+  if (supervisedIndex < 0 || argumentsList.lastIndexOf("--supervised") !== supervisedIndex) {
+    throw new ValidationError("generated launch argv has an invalid supervised flag");
+  }
+  if (presentation !== undefined) argumentsList.splice(supervisedIndex, 0, `--${presentation}`);
   const allowDefinition = LOCAL_LIFECYCLE.launch.options.find((option) => option.name === "allow");
   const allow = options.allow ?? [];
   if (!allowDefinition || allow.length > allowDefinition.maximumItems) {
