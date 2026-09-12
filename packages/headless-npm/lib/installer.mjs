@@ -20,6 +20,9 @@ const RELEASE_ORIGIN = "https://github.com";
 const RELEASE_REPOSITORY = "LockInTime/headless";
 const MANIFEST_LIMIT = 256 * 1024;
 const ASSET_LIMIT = 512 * 1024 * 1024;
+const PROCESS_STDOUT_LIMIT = 1024 * 1024;
+const PROCESS_STDERR_LIMIT = 64 * 1024;
+const PROCESS_TIMEOUT_MS = 120_000;
 const LOCK_WAIT_MS = 30_000;
 const LOCK_STALE_MS = 20 * 60_000;
 const REDIRECT_LIMIT = 5;
@@ -33,15 +36,45 @@ const ALLOWED_DOWNLOAD_HOSTS = new Set([
 const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export class InstallError extends Error {
-  constructor(message, exitCode = 69) {
-    super(message);
+  constructor(message, exitCode = 69, options) {
+    super(message, options);
     this.name = "InstallError";
     this.exitCode = exitCode;
   }
 }
 
-function sleep(milliseconds) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+export class InstallCancelledError extends InstallError {
+  constructor(signal) {
+    super("Headless installation was cancelled", 75, {
+      ...(signal?.reason instanceof Error ? { cause: signal.reason } : {}),
+    });
+    this.name = "InstallCancelledError";
+  }
+}
+
+function throwIfCancelled(signal) {
+  if (signal?.aborted) throw new InstallCancelledError(signal);
+}
+
+function sleep(milliseconds, signal) {
+  throwIfCancelled(signal);
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (error) rejectPromise(error);
+      else resolvePromise();
+    };
+    const onAbort = () => {
+      finish(new InstallCancelledError(signal));
+    };
+    const timer = setTimeout(() => finish(), milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 function packageRoot() {
@@ -127,21 +160,37 @@ function validateDownloadURL(url, allowedHosts, allowHTTP, allowCustomPort) {
 }
 
 async function trustedFetch(url, options) {
-  const { allowedHosts, allowHTTP, allowCustomPort, fetchImpl, timeoutMilliseconds } = options;
+  const { allowedHosts, allowHTTP, allowCustomPort, fetchImpl, signal, timeoutMilliseconds } = options;
   let current = new URL(url);
   for (let redirects = 0; redirects <= REDIRECT_LIMIT; redirects += 1) {
+    throwIfCancelled(signal);
     validateDownloadURL(current, allowedHosts, allowHTTP, allowCustomPort);
-    const response = await fetchImpl(current, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMilliseconds),
-    });
+    const timeoutSignal = AbortSignal.timeout(timeoutMilliseconds);
+    const requestSignal = signal === undefined
+      ? timeoutSignal
+      : AbortSignal.any([signal, timeoutSignal]);
+    let response;
+    try {
+      response = await fetchImpl(current, { redirect: "manual", signal: requestSignal });
+    } catch (cause) {
+      if (signal?.aborted) throw new InstallCancelledError(signal);
+      if (timeoutSignal.aborted) {
+        throw new InstallError("release download timed out", 69, { cause });
+      }
+      throw new InstallError("release download failed", 69, { cause });
+    }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      if (!location) throw new InstallError("release download returned a redirect without a location");
+      if (!location) {
+        await response.body?.cancel();
+        throw new InstallError("release download returned a redirect without a location");
+      }
+      await response.body?.cancel();
       current = new URL(location, current);
       continue;
     }
     if (!response.ok) {
+      await response.body?.cancel();
       throw new InstallError(`release download failed with HTTP ${response.status}: ${current}`);
     }
     return response;
@@ -149,18 +198,28 @@ async function trustedFetch(url, options) {
   throw new InstallError("release download exceeded the redirect limit");
 }
 
-async function boundedText(response, maximumBytes) {
+async function boundedText(response, maximumBytes, signal) {
+  throwIfCancelled(signal);
+  if (response.body === null) throw new InstallError("release manifest response has no body");
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maximumBytes) {
+    await response.body.cancel();
     throw new InstallError("release manifest is too large");
   }
   const chunks = [];
   let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.byteLength;
-    if (size > maximumBytes) throw new InstallError("release manifest is too large");
-    chunks.push(chunk);
+  try {
+    for await (const chunk of response.body) {
+      throwIfCancelled(signal);
+      size += chunk.byteLength;
+      if (size > maximumBytes) throw new InstallError("release manifest is too large");
+      chunks.push(chunk);
+    }
+  } catch (cause) {
+    if (signal?.aborted) throw new InstallCancelledError(signal);
+    throw cause;
   }
+  throwIfCancelled(signal);
   return Buffer.concat(chunks, size).toString("utf8");
 }
 
@@ -176,9 +235,14 @@ export function checksumFromManifest(manifest, asset) {
   return matches[0];
 }
 
-async function downloadAsset(response, destination, expectedChecksum) {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && (declared <= 0 || declared > ASSET_LIMIT)) {
+async function downloadAsset(response, destination, expectedChecksum, signal) {
+  throwIfCancelled(signal);
+  if (response.body === null) throw new InstallError("release asset response has no body", 65);
+  const contentLength = response.headers.get("content-length");
+  const declared = contentLength === null ? undefined : Number(contentLength);
+  if (declared !== undefined
+    && (!Number.isSafeInteger(declared) || declared <= 0 || declared > ASSET_LIMIT)) {
+    await response.body.cancel();
     throw new InstallError("release asset has an unsafe size", 65);
   }
   const handle = await open(destination, "wx", 0o600);
@@ -186,11 +250,13 @@ async function downloadAsset(response, destination, expectedChecksum) {
   let size = 0;
   try {
     for await (const chunk of response.body) {
+      throwIfCancelled(signal);
       size += chunk.byteLength;
       if (size > ASSET_LIMIT) throw new InstallError("release asset is too large", 65);
       hash.update(chunk);
       let offset = 0;
       while (offset < chunk.byteLength) {
+        throwIfCancelled(signal);
         const { bytesWritten } = await handle.write(
           chunk,
           offset,
@@ -200,24 +266,98 @@ async function downloadAsset(response, destination, expectedChecksum) {
         offset += bytesWritten;
       }
     }
+  } catch (cause) {
+    if (signal?.aborted) throw new InstallCancelledError(signal);
+    throw cause;
   } finally {
     await handle.close();
   }
+  throwIfCancelled(signal);
   if (size === 0) throw new InstallError("release asset is empty", 65);
   const actual = hash.digest("hex");
   if (actual !== expectedChecksum) throw new InstallError("release asset checksum mismatch", 65);
 }
 
-function run(command, argumentsList, options = {}) {
+export function run(command, argumentsList, options = {}) {
+  throwIfCancelled(options.signal);
+  const timeoutMilliseconds = options.timeoutMilliseconds ?? PROCESS_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMilliseconds)
+    || timeoutMilliseconds < 1 || timeoutMilliseconds > PROCESS_TIMEOUT_MS) {
+    throw new InstallError(
+      `subprocess timeout must be an integer between 1 and ${PROCESS_TIMEOUT_MS}`,
+      64,
+    );
+  }
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, argumentsList, { stdio: options.stdio ?? "pipe" });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk) => { stdout += chunk; });
-    child.stderr?.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", rejectPromise);
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let cancelled = false;
+    let outputError;
+    let killTimer;
+    let timeoutTimer;
+    const cleanup = () => {
+      options.signal?.removeEventListener("abort", onAbort);
+      if (killTimer) clearTimeout(killTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+    };
+    const terminate = () => {
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      killTimer.unref();
+    };
+    const onAbort = () => {
+      if (cancelled) return;
+      cancelled = true;
+      terminate();
+    };
+    const stopForOutput = (stream, maximumBytes) => {
+      if (outputError !== undefined) return;
+      outputError = new InstallError(
+        `${basename(command)} ${stream} exceeded ${maximumBytes} bytes`,
+        65,
+      );
+      terminate();
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+    timeoutTimer = setTimeout(() => {
+      if (cancelled || outputError !== undefined) return;
+      outputError = new InstallError(
+        `${basename(command)} timed out after ${timeoutMilliseconds} ms`,
+        75,
+      );
+      terminate();
+    }, timeoutMilliseconds);
+    timeoutTimer.unref();
+    child.stdout?.on("data", (chunk) => {
+      stdoutBytes += chunk.byteLength;
+      if (stdoutBytes > PROCESS_STDOUT_LIMIT) {
+        stopForOutput("stdout", PROCESS_STDOUT_LIMIT);
+      } else {
+        stdout += chunk;
+      }
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes > PROCESS_STDERR_LIMIT) {
+        stopForOutput("stderr", PROCESS_STDERR_LIMIT);
+      } else {
+        stderr += chunk;
+      }
+    });
+    child.on("error", (cause) => {
+      cleanup();
+      if (cancelled) rejectPromise(new InstallCancelledError(options.signal));
+      else rejectPromise(cause);
+    });
     child.on("close", (code, signal) => {
-      if (code === 0) resolvePromise({ stdout, stderr });
+      cleanup();
+      if (cancelled) rejectPromise(new InstallCancelledError(options.signal));
+      else if (outputError) rejectPromise(outputError);
+      else if (code === 0) resolvePromise({ stdout, stderr });
       else rejectPromise(new InstallError(
         `${basename(command)} failed${signal ? ` with ${signal}` : ` with status ${code}`}: ${stderr.trim()}`,
         65,
@@ -269,9 +409,10 @@ export function validateArchiveEntries(text, kind) {
   return entries;
 }
 
-async function rejectLinks(root) {
+async function rejectLinks(root, signal) {
   const pending = [root];
   while (pending.length > 0) {
+    throwIfCancelled(signal);
     const directory = pending.pop();
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
@@ -283,37 +424,40 @@ async function rejectLinks(root) {
   }
 }
 
-async function extractArchive(archive, staging, release) {
+async function extractArchive(archive, staging, release, signal) {
   if (release.kind === "tar.gz") {
-    const listing = await run("/usr/bin/tar", ["-tzf", archive]);
+    const listing = await run("/usr/bin/tar", ["-tzf", archive], { signal });
     validateArchiveEntries(listing.stdout, release.kind);
-    await run("/usr/bin/tar", ["-xzf", archive, "-C", staging, "--no-same-owner", "--no-same-permissions"]);
+    await run("/usr/bin/tar", ["-xzf", archive, "-C", staging, "--no-same-owner", "--no-same-permissions"], { signal });
   } else {
-    const listing = await run("/usr/bin/unzip", ["-Z1", archive]);
+    const listing = await run("/usr/bin/unzip", ["-Z1", archive], { signal });
     validateArchiveEntries(listing.stdout, release.kind);
-    await run("/usr/bin/unzip", ["-q", archive, "-d", staging]);
+    await run("/usr/bin/unzip", ["-q", archive, "-d", staging], { signal });
   }
-  await rejectLinks(staging);
+  await rejectLinks(staging, signal);
 }
 
-async function isUsableInstall(directory, release, version) {
+async function isUsableInstall(directory, release, version, signal) {
   try {
+    throwIfCancelled(signal);
     for (const relative of [
       release.executable, release.hostExecutable, release.mcpExecutable, release.brokerExecutable,
     ]) {
       const metadata = await lstat(join(directory, relative));
       if (!metadata.isFile() || metadata.isSymbolicLink()) return false;
     }
-    const result = await run(join(directory, release.executable), ["--version"]);
+    const result = await run(join(directory, release.executable), ["--version"], { signal });
     return result.stdout.trim() === `headless ${version}`;
-  } catch {
+  } catch (error) {
+    if (error instanceof InstallCancelledError) throw error;
     return false;
   }
 }
 
-async function acquireLock(lockPath) {
+async function acquireLock(lockPath, signal) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (Date.now() < deadline) {
+    throwIfCancelled(signal);
     try {
       await mkdir(lockPath, { mode: 0o700 });
       return;
@@ -328,13 +472,15 @@ async function acquireLock(lockPath) {
       } catch (statError) {
         if (statError.code !== "ENOENT") throw statError;
       }
-      await sleep(100);
+      await sleep(100, signal);
     }
   }
   throw new InstallError("timed out waiting for another Headless npm installation", 75);
 }
 
 export async function ensureInstalled(options = {}) {
+  const signal = options.signal;
+  throwIfCancelled(signal);
   const version = options.version ?? await packageVersion();
   const platform = options.platform ?? process.platform;
   const architecture = options.architecture ?? process.arch;
@@ -347,13 +493,14 @@ export async function ensureInstalled(options = {}) {
   await chmod(cacheRoot, 0o700).catch(() => {});
   await chmod(installParent, 0o700);
 
-  if (await isUsableInstall(installDirectory, release, version)) {
+  if (await isUsableInstall(installDirectory, release, version, signal)) {
     return { directory: installDirectory, release };
   }
 
-  await acquireLock(lockPath);
+  await acquireLock(lockPath, signal);
   try {
-    if (await isUsableInstall(installDirectory, release, version)) {
+    throwIfCancelled(signal);
+    if (await isUsableInstall(installDirectory, release, version, signal)) {
       return { directory: installDirectory, release };
     }
     await rm(installDirectory, { recursive: true, force: true });
@@ -372,24 +519,27 @@ export async function ensureInstalled(options = {}) {
       allowHTTP,
       allowCustomPort: options.allowCustomPort === true,
       fetchImpl,
+      signal,
     };
     const manifestResponse = await trustedFetch(`${baseURL}/SHA256SUMS`, {
       ...fetchOptions, timeoutMilliseconds: MANIFEST_TIMEOUT_MS,
     });
-    const manifest = await boundedText(manifestResponse, MANIFEST_LIMIT);
+    const manifest = await boundedText(manifestResponse, MANIFEST_LIMIT, signal);
     const checksum = checksumFromManifest(manifest, release.asset);
     const assetResponse = await trustedFetch(`${baseURL}/${release.asset}`, {
       ...fetchOptions, timeoutMilliseconds: ASSET_TIMEOUT_MS,
     });
-    await downloadAsset(assetResponse, archive, checksum);
-    await extractArchive(archive, staging, release);
+    await downloadAsset(assetResponse, archive, checksum, signal);
+    await extractArchive(archive, staging, release, signal);
+    throwIfCancelled(signal);
     await chmod(join(staging, release.executable), 0o755);
     await chmod(join(staging, release.hostExecutable), 0o755);
     await chmod(join(staging, release.mcpExecutable), 0o755);
     await chmod(join(staging, release.brokerExecutable), 0o755);
-    if (!(await isUsableInstall(staging, release, version))) {
+    if (!(await isUsableInstall(staging, release, version, signal))) {
       throw new InstallError("downloaded Headless package failed its version check", 65);
     }
+    throwIfCancelled(signal);
     await rename(staging, installDirectory);
     return { directory: installDirectory, release };
   } finally {

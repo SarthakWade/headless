@@ -1,7 +1,7 @@
 {
   "name": "@lockintime/headless",
   "version": "1.1.0",
-  "description": "Verified npm launcher for the Headless agent browser",
+  "description": "Typed local SDK and verified launcher for the Headless agent browser",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,18 +11,34 @@
   "homepage": "https://github.com/LockInTime/headless",
   "bugs": "https://github.com/LockInTime/headless/issues",
   "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "headless": "bin/headless.mjs",
     "headless-mcp": "bin/headless-mcp.mjs"
   },
   "files": [
     "bin",
+    "dist",
     "lib",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "prepack": "npm test"
+    "build": "npm run clean && npm run generate:check && tsc -p tsconfig.json",
+    "clean": "node scripts/clean.mjs",
+    "generate": "node scripts/generate-sdk.mjs",
+    "generate:check": "node scripts/generate-sdk.mjs --check",
+    "lint": "node scripts/lint.mjs && npm run generate:check",
+    "test": "npm run build && npm run typecheck && node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepack": "npm run lint && npm test"
   },
   "engines": {
     "node": ">=22"
@@ -30,5 +46,14 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "keywords": [
+    "browser-automation",
+    "headless-browser",
+    "sdk"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "typescript": "^6.0.3"
   }
 }
