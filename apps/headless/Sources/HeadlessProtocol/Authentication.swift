@@ -302,19 +302,19 @@ public enum AuthenticationError: Error, Equatable, CustomStringConvertible {
 
     public var code: String {
         switch self {
-        case .challengeNotFound: return "AUTH_CHALLENGE_NOT_FOUND"
-        case .challengeExpired: return "AUTH_CHALLENGE_EXPIRED"
-        case .challengeConsumed: return "AUTH_CHALLENGE_CONSUMED"
-        case .originChanged: return "AUTH_ORIGIN_CHANGED"
-        case .formChanged: return "AUTH_FORM_CHANGED"
-        case .accountNotFound: return "AUTH_ACCOUNT_NOT_FOUND"
-        case .credentialAliasExists: return "CREDENTIAL_ALIAS_EXISTS"
-        case .vaultUnavailable: return "VAULT_UNAVAILABLE"
-        case .vaultLocked: return "VAULT_LOCKED"
-        case .userPresenceUnavailable: return "USER_PRESENCE_UNAVAILABLE"
-        case .userPresenceDenied: return "USER_PRESENCE_DENIED"
-        case .invalidBrokerResponse: return "VAULT_RESPONSE_INVALID"
-        case .brokerFailed: return "VAULT_OPERATION_FAILED"
+        case .challengeNotFound: return AuthenticationProtocolErrorCode.challengeNotFound.rawValue
+        case .challengeExpired: return AuthenticationProtocolErrorCode.challengeExpired.rawValue
+        case .challengeConsumed: return AuthenticationProtocolErrorCode.challengeConsumed.rawValue
+        case .originChanged: return AuthenticationProtocolErrorCode.originChanged.rawValue
+        case .formChanged: return AuthenticationProtocolErrorCode.formChanged.rawValue
+        case .accountNotFound: return AuthenticationProtocolErrorCode.accountNotFound.rawValue
+        case .credentialAliasExists: return AuthenticationProtocolErrorCode.credentialAliasExists.rawValue
+        case .vaultUnavailable: return AuthenticationProtocolErrorCode.vaultUnavailable.rawValue
+        case .vaultLocked: return AuthenticationProtocolErrorCode.vaultLocked.rawValue
+        case .userPresenceUnavailable: return AuthenticationProtocolErrorCode.userPresenceUnavailable.rawValue
+        case .userPresenceDenied: return AuthenticationProtocolErrorCode.userPresenceDenied.rawValue
+        case .invalidBrokerResponse: return AuthenticationProtocolErrorCode.invalidBrokerResponse.rawValue
+        case .brokerFailed: return AuthenticationProtocolErrorCode.brokerFailed.rawValue
         }
     }
 

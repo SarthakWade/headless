@@ -31,6 +31,9 @@ export HEADLESS_HOST_LOG="$HOST_LOG"
 STEP="boot"
 RESTORE_PID=""
 HOST_PID=""
+SUPERVISED_LAUNCHER_PID=""
+SUPERVISED_FIFO=""
+SUPERVISED_OUTPUT=""
 DEFAULTS_DOMAIN="com.headless.app"
 PRESENTATION_KEY="AgentStartupPresentation"
 DEFAULTS_HAD_LAST_URL=0
@@ -439,6 +442,9 @@ cleanup() {
   if [[ -n "$RESTORE_PID" ]]; then
     kill "$RESTORE_PID" >/dev/null 2>&1 || true
   fi
+  if [[ -n "$SUPERVISED_LAUNCHER_PID" ]]; then
+    kill "$SUPERVISED_LAUNCHER_PID" >/dev/null 2>&1 || true
+  fi
   kill "$FIXTURE_PID" >/dev/null 2>&1 || true
   restore_last_url
   restore_startup_presentation
@@ -448,6 +454,8 @@ cleanup() {
   rm -rf "$HEADLESS_ARTIFACT_DIR"
   rm -rf "$MENU_SNAPSHOT_DIR"
   rm -f "$HEADLESS_SOCKET" "$LOG" "$HOST_LOG" "$RESTORE_LOG"
+  [[ -z "$SUPERVISED_FIFO" ]] || rm -f "$SUPERVISED_FIFO"
+  [[ -z "$SUPERVISED_OUTPUT" ]] || rm -f "$SUPERVISED_OUTPUT"
   if [[ "$CLIPBOARD_SAVED" == 0 ]]; then
     rm -f "$CLIPBOARD_BACKUP"
   fi
@@ -530,6 +538,41 @@ test "$(defaults read "$DEFAULTS_DOMAIN" "$PRESENTATION_KEY")" = "background"
 CONFIGURED_PRESENTATION="$("$CLI" config get startup-presentation)"
 echo "$CONFIGURED_PRESENTATION" | grep -q '"configured":"background"'
 echo "$CONFIGURED_PRESENTATION" | grep -q '"startupPresentation":"background"'
+
+STEP="supervised-host-owner-exit"
+SUPERVISED_FIFO="$(mktemp "${TMPDIR:-/tmp}/headless-supervised-fifo.XXXXXX")"
+SUPERVISED_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/headless-supervised-output.XXXXXX")"
+rm -f "$SUPERVISED_FIFO"
+mkfifo "$SUPERVISED_FIFO"
+"$CLI" start --background --supervised <"$SUPERVISED_FIFO" >"$SUPERVISED_OUTPUT" &
+SUPERVISED_LAUNCHER_PID=$!
+exec 9>"$SUPERVISED_FIFO"
+for _ in {1..160}; do
+  [[ -s "$SUPERVISED_OUTPUT" ]] && "$CLI" status >/dev/null 2>&1 && break
+  sleep 0.05
+done
+SUPERVISED_RESULT="$(cat "$SUPERVISED_OUTPUT")"
+echo "$SUPERVISED_RESULT" | grep -q '"ready":true'
+SUPERVISED_HOST_PID="$(echo "$SUPERVISED_RESULT" | sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p')"
+test -n "$SUPERVISED_HOST_PID"
+test "$("$CLI" status | sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p')" = "$SUPERVISED_HOST_PID"
+kill -9 "$SUPERVISED_LAUNCHER_PID"
+wait "$SUPERVISED_LAUNCHER_PID" >/dev/null 2>&1 || true
+SUPERVISED_LAUNCHER_PID=""
+for _ in {1..100}; do
+  ! kill -0 "$SUPERVISED_HOST_PID" >/dev/null 2>&1 && break
+  sleep 0.05
+done
+if kill -0 "$SUPERVISED_HOST_PID" >/dev/null 2>&1; then
+  echo "supervised host survived launcher termination" >&2
+  exit 1
+fi
+exec 9>&-
+rm -f "$SUPERVISED_FIFO" "$SUPERVISED_OUTPUT"
+SUPERVISED_FIFO=""
+SUPERVISED_OUTPUT=""
+
+STEP="start-host"
 START_RESULT="$("$CLI" start)" || {
   print -r -u2 -- "headless start failed:"
   print -r -u2 -- "$START_RESULT"

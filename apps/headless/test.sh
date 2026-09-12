@@ -25,6 +25,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if swiftc -module-cache-path build/module-cache -sdk "$sdk" \
         -target "$(uname -m)-apple-macos13.0" -typecheck \
         Sources/HeadlessProtocol/Protocol.swift \
+        Sources/HeadlessProtocol/ProtocolSchema.swift \
+        Sources/HeadlessProtocol/SupervisedHost.swift \
         Sources/HeadlessProtocol/CredentialCommands.swift \
         Sources/HeadlessProtocol/HostError.swift \
         Sources/HeadlessProtocol/CaptureFormats.swift \
@@ -64,7 +66,7 @@ swift build "${SDK_ARGS[@]}" --product headless --scratch-path "$TEST_SCRATCH"
 swift build "${SDK_ARGS[@]}" --product headless-credential-broker --scratch-path "$TEST_SCRATCH"
 swift build "${SDK_ARGS[@]}" --product headless-mcp --scratch-path "$TEST_SCRATCH"
 swift build "${SDK_ARGS[@]}" --product headless-mcp-tests --scratch-path "$TEST_SCRATCH"
-"$BIN_PATH/headless-protocol-tests"
+HEADLESS_REQUIRE_SDK_CONTRACT=1 "$BIN_PATH/headless-protocol-tests"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   cc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror \
     -I SecurePrompt/include SecurePrompt/SecurePrompt.c Tests/secure-prompt.c \
@@ -77,6 +79,11 @@ fi
 "$TEST_SCRATCH/secure-prompt-tests"
 [[ "$("$BIN_PATH/headless" --version)" == "headless $EXPECTED_VERSION" ]] || {
   echo "headless tests: CLI product version does not match $EXPECTED_VERSION" >&2
+  exit 1
+}
+"$BIN_PATH/headless" schema > "$TEST_SCRATCH/protocol-schema.json"
+cmp "$TEST_SCRATCH/protocol-schema.json" ../../sdk/protocol-schema.json || {
+  echo "headless tests: sdk/protocol-schema.json is stale; regenerate it with headless schema" >&2
   exit 1
 }
 PATH_INVOCATION_ROOT="$TEST_SCRATCH/path-invocation"
@@ -95,4 +102,5 @@ for invocation in path symlink; do
     exit 1
   fi
 done
-"$BIN_PATH/headless-mcp-tests" "$BIN_PATH/headless-mcp" "$EXPECTED_VERSION"
+"$BIN_PATH/headless-mcp-tests" "$BIN_PATH/headless-mcp" "$EXPECTED_VERSION" \
+  "../../sdk/protocol-fixtures.json"

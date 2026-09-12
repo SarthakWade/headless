@@ -155,11 +155,7 @@ public struct CommandRequest: Codable, Equatable, Sendable {
     }
 
     private func validateCommandParameters() throws {
-        func allow(_ keys: Set<String>) throws {
-            if let unexpected = parameters.keys.first(where: { !keys.contains($0) }) {
-                throw ProtocolValidationError.invalidParameter("Unexpected parameter for \(command.rawValue): \(unexpected)")
-            }
-        }
+        try protocolCommandDefinition(for: command).validate(parameters)
         func string(_ key: String, required: Bool = false, maximumBytes: Int = 8_192) throws -> String? {
             guard let value = parameters[key] else {
                 if required { throw ProtocolValidationError.invalidParameter("Missing string parameter: \(key)") }
@@ -194,11 +190,7 @@ public struct CommandRequest: Codable, Equatable, Sendable {
             }
             return result
         }
-        func target(allowValue: Bool, required: Bool = true, validateAllowedKeys: Bool = true) throws {
-            let allowed: Set<String> = allowValue ? ["target", "role", "name", "value"] : ["target", "role", "name"]
-            if validateAllowedKeys {
-                try allow(allowed)
-            }
+        func target(allowValue: Bool, required: Bool = true) throws {
             let reference = try string("target", maximumBytes: 16)
             let role = try string("role", maximumBytes: 128)
             let name = try string("name", maximumBytes: 1_000)
@@ -217,9 +209,8 @@ public struct CommandRequest: Codable, Equatable, Sendable {
         switch command {
         case .ping, .shutdown, .profileClear, .sessionList, .sessionClose, .back, .reload,
              .captureInfo, .artifactList, .recordStatus, .qaReport, .qaClear:
-            try allow([])
+            break
         case .authLogin:
-            try allow(["challenge", "account", "interactive"])
             if let challenge = try string("challenge", maximumBytes: 64),
                UUID(uuidString: challenge) == nil {
                 throw ProtocolValidationError.invalidParameter("Invalid authentication challenge")
@@ -238,16 +229,13 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 )
             }
         case .sessionCreate:
-            try allow(["name", "isolated"])
             if let name = try string("name", required: true, maximumBytes: 64) {
                 try validateIdentifier(name, field: "session")
             }
             try boolean("isolated")
         case .visit:
-            try allow(["url"])
             if let value = try string("url", required: true) { _ = try normalizedWebURL(value) }
         case .inspect:
-            try allow(["interactive", "text", "context", "task", "within", "limit", "budget", "depth"])
             try boolean("interactive"); try boolean("text")
             if let context = try string("context", maximumBytes: 16),
                !["summary", "outline", "text", "actions", "full"].contains(context) {
@@ -273,16 +261,13 @@ public struct CommandRequest: Codable, Equatable, Sendable {
         case .fill:
             try target(allowValue: true)
         case .upload:
-            try target(allowValue: false, validateAllowedKeys: false)
-            try allow(["target", "role", "name", "artifact"])
+            try target(allowValue: false)
             if let artifact = try string("artifact", required: true, maximumBytes: 128) {
                 try validateArtifactName(artifact, expectedExtensions: uploadArtifactExtensions)
             }
         case .press:
-            try allow(["key"])
             _ = try string("key", required: true, maximumBytes: 32)
         case .scroll:
-            try allow(["direction", "amount"])
             let direction = try string("direction") ?? "down"
             guard ["up", "down", "top", "bottom"].contains(direction) else {
                 throw ProtocolValidationError.invalidParameter("Invalid scroll direction")
@@ -292,20 +277,17 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 maximum: ProtocolBounds.scrollAmount.upperBound
             )
         case .wait:
-            try allow(["settled", "url", "text", "timeoutMs"])
             try boolean("settled")
             _ = try string("url")
             _ = try string("text", maximumBytes: 30_000)
             _ = try number("timeoutMs", minimum: 100, maximum: 120_000)
         case .tour:
-            try allow(["fullPage", "pace"])
             try boolean("fullPage")
             _ = try number("pace", minimum: 100, maximum: 5_000)
         case .screenshot:
-            try allow(["fullPage", "target", "role", "name", "output", "series", "outputPrefix", "format", "clipboard"])
             try boolean("fullPage")
             try boolean("clipboard")
-            try target(allowValue: false, required: false, validateAllowedKeys: false)
+            try target(allowValue: false, required: false)
             let hasTarget = parameters["target"] != nil || parameters["role"] != nil || parameters["name"] != nil
             let series = try string("series", maximumBytes: 32)
             if let series, !["viewport", "section"].contains(series) {
@@ -347,7 +329,6 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 try validateArtifactPrefix(outputPrefix)
             }
         case .recordStart:
-            try allow(["output", "fps", "format", "quality"])
             let format = try recordingFormat(
                 explicit: string("format", maximumBytes: 16),
                 output: parameters["output"]?.stringValue
@@ -360,41 +341,33 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 _ = try RecordingQuality.parse(quality)
             }
         case .recordStop:
-            try allow(["output"])
             if let output = try string("output", maximumBytes: 128) {
                 try validateArtifactName(output, expectedExtensions: RecordingFormat.artifactExtensions)
             }
         case .consoleList:
-            try allow(["level", "limit"])
             if let level = try string("level", maximumBytes: 16),
                !["all", "log", "info", "debug", "warn", "error", "assert"].contains(level) {
                 throw ProtocolValidationError.invalidParameter("Invalid console level")
             }
             _ = try number("limit", minimum: 1, maximum: 200)
         case .networkList:
-            try allow(["failed", "status", "limit"])
             try boolean("failed")
             _ = try number("status", minimum: 100, maximum: 599)
             _ = try number("limit", minimum: 1, maximum: 200)
         case .networkGet:
-            try allow(["requestId"])
             _ = try string("requestId", required: true, maximumBytes: 128)
         case .stylesGet:
-            try target(allowValue: false, validateAllowedKeys: false)
-            try allow(["target", "role", "name", "properties"])
+            try target(allowValue: false)
             _ = try strings("properties", maximumItems: 64, maximumBytes: 128)
         case .cookiesList:
-            try allow(["includeValues"])
             try boolean("includeValues")
         case .storageList:
-            try allow(["scope", "includeValues"])
             let scope = try string("scope", maximumBytes: 16) ?? "all"
             guard ["local", "session", "all"].contains(scope) else {
                 throw ProtocolValidationError.invalidParameter("Invalid storage scope")
             }
             try boolean("includeValues")
         case .visualCompare:
-            try allow(["before", "after", "output"])
             for key in ["before", "after"] {
                 if let name = try string(key, required: true, maximumBytes: 128) {
                     try validateArtifactName(name, expectedExtension: "png")
@@ -404,26 +377,22 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 try validateArtifactName(output, expectedExtension: "png")
             }
         case .performanceGet, .animationList:
-            try allow([])
+            break
         case .reportCreate:
-            try allow(["output"])
             if let output = try string("output", maximumBytes: 128) {
                 try validateArtifactName(output, expectedExtension: "json")
             }
         case .flowStart:
-            try allow([])
+            break
         case .flowStop:
-            try allow(["output"])
             if let output = try string("output", maximumBytes: 128) {
                 try validateArtifactName(output, expectedExtension: "json")
             }
         case .flowRun:
-            try allow(["input"])
             if let input = try string("input", required: true, maximumBytes: 128) {
                 try validateArtifactName(input, expectedExtension: "json")
             }
         case .networkEmulate:
-            try allow(["offline", "latencyMs", "downloadKbps", "uploadKbps"])
             try boolean("offline")
             _ = try number(
                 "latencyMs", minimum: ProtocolBounds.networkLatencyMilliseconds.lowerBound,
@@ -438,7 +407,6 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 maximum: ProtocolBounds.networkThroughputKbps.upperBound
             )
         case .networkMockSet:
-            try allow(["url", "status", "body", "contentType"])
             if let url = try string("url", required: true, maximumBytes: 8_192) { _ = try normalizedWebURL(url) }
             _ = try number("status", minimum: 100, maximum: 599)
             _ = try string("body", required: true, maximumBytes: 65_536)
@@ -447,7 +415,7 @@ public struct CommandRequest: Codable, Equatable, Sendable {
                 throw ProtocolValidationError.invalidParameter("Invalid content type")
             }
         case .networkMockClear:
-            try allow([])
+            break
         }
     }
 }

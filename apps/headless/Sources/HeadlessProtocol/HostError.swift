@@ -1,6 +1,6 @@
 import Foundation
 
-public enum HostErrorCode: String, Sendable {
+public enum HostErrorCode: String, CaseIterable, Sendable {
     case timedOut = "TIMEOUT"
     case elementNotFound = "ELEMENT_NOT_FOUND"
     case regionNotFound = "REGION_NOT_FOUND"

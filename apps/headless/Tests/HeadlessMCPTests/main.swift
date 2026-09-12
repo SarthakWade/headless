@@ -24,9 +24,28 @@ func integer(_ value: Any?, _ message: String) throws -> Int {
 }
 
 func run() throws {
-    guard CommandLine.arguments.count == 3 else {
-        throw TestFailure(description: "usage: headless-mcp-tests /path/to/headless-mcp EXPECTED_VERSION")
+    guard CommandLine.arguments.count == 4 else {
+        throw TestFailure(
+            description: "usage: headless-mcp-tests /path/to/headless-mcp EXPECTED_VERSION /path/to/protocol-fixtures.json"
+        )
     }
+
+    let fixtureData = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[3]))
+    let fixtureRoot = try object(
+        JSONSerialization.jsonObject(with: fixtureData), "SDK fixture envelope was invalid"
+    )
+    guard let fixtureCases = fixtureRoot["cases"] as? [[String: Any]],
+          let fixture = fixtureCases.first,
+          let fixtureArguments = fixture["argv"] as? [String],
+          let fixtureRequest = fixture["request"] as? [String: Any],
+          let fixtureCommand = fixtureRequest["command"] as? String else {
+        throw TestFailure(description: "SDK status fixture was absent")
+    }
+    let fixtureCallData = try JSONSerialization.data(withJSONObject: [
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": ["name": "headless", "arguments": ["argv": fixtureArguments]],
+    ])
+    let fixtureCall = String(decoding: fixtureCallData, as: UTF8.self)
 
     try LocalRuntime.preparePrivateDirectory()
     let socketPath = LocalRuntime.directoryURL
@@ -57,7 +76,7 @@ func run() throws {
         #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
         #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
         #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
-        #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"headless","arguments":{"argv":["status"]}}}"#,
+        fixtureCall,
         #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"headless","arguments":{"argv":["stop"]}}}"#,
         #"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"headless","arguments":{"argv":["session","close","disposable"]}}}"#,
         "not-json",
@@ -90,6 +109,17 @@ func run() throws {
     let serverInfo = try object(initialize["serverInfo"], "initialize server info was absent")
     try expect(serverInfo["name"] as? String == "headless", "initialize server name changed")
     try expect(serverInfo["version"] as? String == CommandLine.arguments[2], "MCP product version changed")
+    try expect(
+        serverInfo["headlessProtocolVersion"] as? String == headlessProtocolVersion,
+        "MCP wire version drifted from the SDK contract"
+    )
+    let mcpSchemaVersion = try integer(
+        serverInfo["headlessSchemaVersion"], "MCP schema version was absent"
+    )
+    try expect(
+        mcpSchemaVersion == headlessProtocolSchemaVersion,
+        "MCP schema version drifted from the SDK contract"
+    )
 
     let list = try object(responses[1]["result"], "tools/list result was absent")
     guard let tools = list["tools"] as? [[String: Any]], tools.count == 1 else {
@@ -118,6 +148,10 @@ func run() throws {
     try expect(browserResponse["ok"] as? Bool == true, "browser protocol response was not successful")
     let browserResult = try object(browserResponse["result"], "browser protocol result was absent")
     try expect(browserResult["ready"] as? Bool == true, "browser command did not reach the local host")
+    try expect(
+        browserResult["command"] as? String == fixtureCommand,
+        "MCP request drifted from the shared SDK fixture"
+    )
 
     for (index, expectedCommand) in [(3, "shutdown"), (4, "session.close")] {
         let destructiveCall = try object(responses[index]["result"], "destructive tools/call result was absent")

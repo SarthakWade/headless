@@ -6,6 +6,9 @@ export XDG_DATA_HOME="/tmp/headless-data-e2e-$$"
 export XDG_CONFIG_HOME="/tmp/headless-config-e2e-$$"
 export HEADLESS_HOST_LOG="/tmp/headless-host-e2e-$$.log"
 STEP="setup"
+SUPERVISED_FIFO=""
+SUPERVISED_OUTPUT=""
+SUPERVISED_LAUNCHER_PID=""
 
 FIXTURE_ROOT="$(mktemp -d /tmp/headless-fixture.XXXXXX)"
 INSTALL_ROOT="$(mktemp -d /tmp/headless-install.XXXXXX)"
@@ -35,6 +38,9 @@ cleanup() {
     fi
   fi
   headless stop >/dev/null 2>&1 || true
+  if [ -n "$SUPERVISED_LAUNCHER_PID" ]; then
+    kill "$SUPERVISED_LAUNCHER_PID" >/dev/null 2>&1 || true
+  fi
   kill "$FIXTURE_PID" >/dev/null 2>&1 || true
   rm -rf "$FIXTURE_ROOT"
   rm -rf "$INSTALL_ROOT"
@@ -42,6 +48,8 @@ cleanup() {
   rm -rf "$XDG_DATA_HOME"
   rm -rf "$XDG_CONFIG_HOME"
   rm -f "$HEADLESS_HOST_LOG"
+  [ -z "$SUPERVISED_FIFO" ] || rm -f "$SUPERVISED_FIFO"
+  [ -z "$SUPERVISED_OUTPUT" ] || rm -f "$SUPERVISED_OUTPUT"
   exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -111,6 +119,39 @@ if PRESENTATION_START="$(headless start --foreground 2>&1)"; then
   exit 1
 fi
 echo "$PRESENTATION_START" | grep -q 'UNSUPPORTED_CAPABILITY'
+
+STEP="supervised-host-owner-exit"
+SUPERVISED_FIFO="$(mktemp /tmp/headless-supervised-fifo.XXXXXX)"
+SUPERVISED_OUTPUT="$(mktemp /tmp/headless-supervised-output.XXXXXX)"
+rm -f "$SUPERVISED_FIFO"
+mkfifo "$SUPERVISED_FIFO"
+headless start --supervised <"$SUPERVISED_FIFO" >"$SUPERVISED_OUTPUT" &
+SUPERVISED_LAUNCHER_PID=$!
+exec 9>"$SUPERVISED_FIFO"
+for _ in $(seq 1 160); do
+  [ -s "$SUPERVISED_OUTPUT" ] && headless status >/dev/null 2>&1 && break
+  sleep 0.05
+done
+SUPERVISED_RESULT="$(cat "$SUPERVISED_OUTPUT")"
+echo "$SUPERVISED_RESULT" | grep -q '"ready":true'
+SUPERVISED_HOST_PID="$(echo "$SUPERVISED_RESULT" | sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p')"
+test -n "$SUPERVISED_HOST_PID"
+test "$(headless status | sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p')" = "$SUPERVISED_HOST_PID"
+kill -9 "$SUPERVISED_LAUNCHER_PID"
+wait "$SUPERVISED_LAUNCHER_PID" >/dev/null 2>&1 || true
+SUPERVISED_LAUNCHER_PID=""
+for _ in $(seq 1 100); do
+  ! kill -0 "$SUPERVISED_HOST_PID" >/dev/null 2>&1 && break
+  sleep 0.05
+done
+if kill -0 "$SUPERVISED_HOST_PID" >/dev/null 2>&1; then
+  echo "supervised host survived launcher termination" >&2
+  exit 1
+fi
+exec 9>&-
+rm -f "$SUPERVISED_FIFO" "$SUPERVISED_OUTPUT"
+SUPERVISED_FIFO=""
+SUPERVISED_OUTPUT=""
 
 STEP="host-start"
 headless start | grep -q '"ready":true'

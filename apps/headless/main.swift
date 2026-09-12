@@ -952,6 +952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var controllers: [BrowserWindowController] = []
     private let agentServer = LocalSocketServer()
     private var hostCore: HostCore<WebKitBrowserEngine>?
+    private var ownerMonitor: SupervisedHostOwnerMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let artifacts: ArtifactStore
@@ -1015,6 +1016,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             shutdownHandler: { DispatchQueue.main.async { NSApp.terminate(nil) } }
         )
         hostCore = core
+        ownerMonitor = SupervisedHostOwnerMonitor.startIfRequested {
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
         do {
             try agentServer.start { [weak self] request in
                 self?.hostCore?.handle(request) ?? CommandResponse.failure(
@@ -1075,6 +1079,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
+        ownerMonitor?.stop()
         hostCore?.stop()
         agentServer.stop()
     }

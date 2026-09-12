@@ -301,6 +301,12 @@ npx @lockintime/headless help
 npx -p @lockintime/headless headless-mcp
 ```
 
+SDK generators consume the Swift-owned contract printed by `headless schema`.
+The checked-in `sdk/protocol-schema.json` is verified against that output in
+the protocol suite. Wire compatibility is exact by protocol version and is
+independent of the product release version. Clients must negotiate engine
+capabilities and fail explicitly rather than emulate missing behavior.
+
 The launcher selects the matching macOS or Linux release, verifies it against
 the release `SHA256SUMS`, validates its archive and embedded product version,
 and caches it privately for subsequent commands. Its download origin is fixed

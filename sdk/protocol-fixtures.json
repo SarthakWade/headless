@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": "0.5",
+  "cases": [
+    {
+      "name": "host status",
+      "argv": ["status"],
+      "request": {
+        "id": "fixture-status",
+        "version": "0.5",
+        "command": "ping",
+        "parameters": {}
+      },
+      "response": {
+        "id": "fixture-status",
+        "version": "0.5",
+        "ok": true,
+        "result": {
+          "ready": true,
+          "pid": 1234,
+          "engine": "webkit",
+          "platform": "macOS",
+          "productVersion": "1.2.3",
+          "protocolVersion": "0.5",
+          "capabilities": {},
+          "recordingAvailable": false,
+          "artifactDirectory": "/private/fixture",
+          "navigationAllowlist": []
+        }
+      }
+    },
+    {
+      "name": "visit page",
+      "argv": ["visit", "https://example.com/path"],
+      "request": {
+        "id": "fixture-visit",
+        "version": "0.5",
+        "command": "visit",
+        "parameters": {"url": "https://example.com/path"}
+      },
+      "response": {
+        "id": "fixture-visit",
+        "version": "0.5",
+        "ok": true,
+        "result": {
+          "url": "https://example.com/path",
+          "title": "Fixture",
+          "readyState": "complete",
+          "text": "Untrusted fixture page",
+          "runningAnimations": 0,
+          "mutationQuietMs": 500,
+          "scrollY": 0,
+          "contentHeight": 800
+        }
+      }
+    },
+    {
+      "name": "credential alias login",
+      "argv": ["auth", "login", "--challenge", "11111111-1111-4111-8111-111111111111", "--account", "work"],
+      "request": {
+        "id": "fixture-auth",
+        "version": "0.5",
+        "command": "auth.login",
+        "parameters": {"challenge": "11111111-1111-4111-8111-111111111111", "account": "work"}
+      },
+      "response": {
+        "id": "fixture-auth",
+        "version": "0.5",
+        "ok": true,
+        "result": {
+          "origin": "https://example.com",
+          "account": "work",
+          "saved": true,
+          "continuation": "authenticated",
+          "passwordExposed": false,
+          "originalActionReplayed": false
+        }
+      }
+    }
+  ],
+  "directRequests": [
+    {
+      "id": "fixture-uppercase-screenshot",
+      "version": "0.5",
+      "command": "screenshot",
+      "parameters": {"format": "PNG", "fullPage": false}
+    },
+    {
+      "id": "fixture-uppercase-recording",
+      "version": "0.5",
+      "command": "record.start",
+      "parameters": {"format": "MP4", "quality": "HIGH"}
+    }
+  ],
+  "invalidRequests": [
+    {
+      "id": "fixture-unknown-parameter",
+      "version": "0.5",
+      "command": "ping",
+      "parameters": {"unexpected": true}
+    }
+  ]
+}

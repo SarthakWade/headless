@@ -52,7 +52,11 @@ while let line = readLine() {
         write(["jsonrpc": "2.0", "id": id ?? NSNull(), "result": [
             "protocolVersion": "2025-06-18",
             "capabilities": ["tools": ["listChanged": false]],
-            "serverInfo": ["name": "headless", "version": headlessProductVersion],
+            "serverInfo": [
+                "name": "headless", "version": headlessProductVersion,
+                "headlessProtocolVersion": headlessProtocolVersion,
+                "headlessSchemaVersion": headlessProtocolSchemaVersion,
+            ],
         ]])
     case "notifications/initialized":
         continue

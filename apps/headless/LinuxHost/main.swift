@@ -190,6 +190,9 @@ do {
     )
     let server = LocalSocketServer()
     try server.start { request in core.handle(request) }
+    let ownerMonitor = SupervisedHostOwnerMonitor.startIfRequested {
+        stopped.signal()
+    }
 
     #if canImport(Glibc)
     signal(SIGTERM, SIG_IGN)
@@ -203,6 +206,7 @@ do {
     #endif
 
     stopped.wait()
+    ownerMonitor?.stop()
     server.stop()
     core.stop()
 } catch {

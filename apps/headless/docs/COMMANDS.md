@@ -21,12 +21,13 @@ headless <command> -- --value       # stop option parsing; literal values
 
 ```sh
 version | --version
-start [--background|--foreground] [--allow PATTERN]... | status | stop | runtime
+start [--background|--foreground] [--allow PATTERN]... [--supervised] | status | stop | runtime
 profile clear
 config list | config describe KEY | config get KEY
 config set KEY VALUE | config reset KEY
 session create [NAME] [--isolated] | session list | session close NAME
 capabilities
+schema
 ```
 
 - `start` launches the host if it is not already running. Repeatable
@@ -37,6 +38,14 @@ capabilities
   `start --allow` with the same hosts in any order is a no-op. `stop`
   controls the host afterwards. `runtime` reports which engine is active and
   where it came from.
+- `start --supervised` is for SDK-owned lifecycle management. It refuses to
+  attach to an existing host, verifies the launched host PID, and shuts the host
+  down when the launcher input closes or the launcher exits. Normal starts
+  remain shared and detached.
+- `schema` prints the versioned SDK contract generated from the Swift request
+  definitions. It is local-only and includes request and response envelopes,
+  command parameters and bounds, errors, compatibility, cancellation, and
+  security metadata. The checked-in golden copy is `sdk/protocol-schema.json`.
 - `config list` discovers agent-visible settings. `config describe KEY` reports
   its type, default, platform scope, access class, effect timing, current value,
   and whether the current platform supports it. `config get`, `set`, and

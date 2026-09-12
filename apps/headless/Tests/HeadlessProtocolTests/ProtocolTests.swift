@@ -36,6 +36,16 @@ private func expectThrows(_ message: String, _ body: () throws -> Void) throws {
     }
 }
 
+private func repositoryFile(_ relativePath: String) -> URL? {
+    var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    while directory.path != "/" {
+        let candidate = directory.appendingPathComponent(relativePath)
+        if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        directory.deleteLastPathComponent()
+    }
+    return nil
+}
+
 private func expectSettingsError(
     _ expected: SettingsError, _ message: String, _ body: () throws -> Void
 ) throws {
@@ -542,7 +552,8 @@ struct ProtocolTests {
         try expect(
             repeated.local == .start(
                 presentation: nil,
-                allowlist: try NavigationAllowlist.parse(["localhost", "*.staging.example.com"])
+                allowlist: try NavigationAllowlist.parse(["localhost", "*.staging.example.com"]),
+                supervised: false
             ),
             "repeated --allow flags should parse in order"
         )
@@ -551,7 +562,8 @@ struct ProtocolTests {
         try expect(
             commaSeparated.local == .start(
                 presentation: nil,
-                allowlist: try NavigationAllowlist.parse(["localhost", "127.0.0.1"])
+                allowlist: try NavigationAllowlist.parse(["localhost", "127.0.0.1"]),
+                supervised: false
             ),
             "comma-separated --allow values should parse"
         )
@@ -577,7 +589,8 @@ struct ProtocolTests {
         try expect(
             withBackground.local == .start(
                 presentation: .background,
-                allowlist: try NavigationAllowlist.parse(["localhost"])
+                allowlist: try NavigationAllowlist.parse(["localhost"]),
+                supervised: false
             ),
             "start --allow should compose with --background"
         )
@@ -587,7 +600,8 @@ struct ProtocolTests {
         try expect(
             withForeground.local == .start(
                 presentation: .foreground,
-                allowlist: try NavigationAllowlist.parse(["127.0.0.1"])
+                allowlist: try NavigationAllowlist.parse(["127.0.0.1"]),
+                supervised: false
             ),
             "start --allow should compose with --foreground"
         )
@@ -1271,17 +1285,28 @@ struct ProtocolTests {
         }
 
         let localCommands: [([String], LocalCommand)] = [
-            (["start"], .start(presentation: nil, allowlist: .unrestricted)),
-            (["start", "--background"], .start(presentation: .background, allowlist: .unrestricted)),
-            (["start", "--foreground"], .start(presentation: .foreground, allowlist: .unrestricted)),
+            (["start"], .start(
+                presentation: nil, allowlist: .unrestricted, supervised: false
+            )),
+            (["start", "--background"], .start(
+                presentation: .background, allowlist: .unrestricted, supervised: false
+            )),
+            (["start", "--foreground"], .start(
+                presentation: .foreground, allowlist: .unrestricted, supervised: false
+            )),
+            (["start", "--supervised"], .start(
+                presentation: nil, allowlist: .unrestricted, supervised: true
+            )),
             (["start", "--allow", "localhost"], .start(
-                presentation: nil, allowlist: try NavigationAllowlist.parse(["localhost"])
+                presentation: nil, allowlist: try NavigationAllowlist.parse(["localhost"]),
+                supervised: false
             )),
             (
                 ["start", "--allow", "localhost", "--allow", "127.0.0.1", "--background"],
                 .start(
                     presentation: .background,
-                    allowlist: try NavigationAllowlist.parse(["localhost", "127.0.0.1"])
+                    allowlist: try NavigationAllowlist.parse(["localhost", "127.0.0.1"]),
+                    supervised: false
                 )
             ),
             (["config", "get", "startup-presentation"], .config(.get("startup-presentation"))),
@@ -2398,6 +2423,7 @@ struct ProtocolTests {
         try expect(
             localCommandNames.isSuperset(of: [
                 "config.describe", "config.get", "config.list", "config.reset", "config.set",
+                "schema",
             ]),
             "capabilities should advertise every local config command"
         )
@@ -2518,6 +2544,226 @@ struct ProtocolTests {
         )
         try expect(security["tcpListener"] == .bool(false), "capabilities must not advertise TCP control")
         try expect(security["arbitraryJavaScript"] == .bool(false), "capabilities must not advertise arbitrary JavaScript")
+    }
+
+    static func sdkProtocolSchemaContract() throws {
+        try expect(
+            protocolCommandDefinitions.count == CommandName.allCases.count,
+            "the SDK schema must describe every wire command exactly once"
+        )
+        try expect(
+            Set(protocolCommandDefinitions.keys) == Set(CommandName.allCases),
+            "the SDK schema command set must match CommandName"
+        )
+        for command in CommandName.allCases {
+            let definition = protocolCommandDefinition(for: command)
+            let result = protocolResultDefinition(for: command)
+            try expect(
+                definition.command == command,
+                "the SDK schema must preserve the command identity"
+            )
+            try expect(
+                Set(definition.parameters.map(\.name)).count == definition.parameters.count,
+                "the SDK schema must not contain duplicate parameter names"
+            )
+            try expect(
+                !result.name.isEmpty && Set(result.fields.map(\.name)).count == result.fields.count,
+                "the SDK schema must define one coherent result shape per command"
+            )
+            try expect(
+                definition.timeout.defaultMilliseconds > 0,
+                "every SDK command must declare a positive transport timeout"
+            )
+        }
+        let hostCommands: Set<CommandName> = [
+            .ping, .shutdown, .profileClear, .sessionCreate, .sessionList, .artifactList,
+        ]
+        try expect(
+            Set(protocolCommandDefinitions.values.filter { $0.scope == .host }.map(\.command))
+                == hostCommands,
+            "SDK host and session command scopes must match HostCore dispatch"
+        )
+        try expect(
+            protocolCommandDefinition(for: .wait).timeout.milliseconds(
+                for: ["timeoutMs": .number(90_000)]
+            ) == 95_000,
+            "SDK timeout metadata must preserve parameter-based wait deadlines"
+        )
+        try expect(
+            protocolCommandDefinition(for: .screenshot).timeout.milliseconds(
+                for: ["series": .string("viewport")]
+            ) == 125_000,
+            "SDK timeout metadata must preserve screenshot series deadlines"
+        )
+        try expect(
+            protocolCommandDefinition(for: .visit).resultContainsUntrustedContent
+                && protocolCommandDefinition(for: .captureInfo).resultContainsUntrustedContent,
+            "page state and capture metadata must remain marked as untrusted"
+        )
+
+        let schemaInvocation = try CLIParser().parse(["schema"])
+        try expect(schemaInvocation.local == .schema, "schema must remain a local CLI command")
+        try expect(schemaInvocation.request == nil, "schema must not enter the browser protocol")
+        try expectThrows("schema should reject unexpected arguments") {
+            _ = try CLIParser().parse(["schema", "extra"])
+        }
+
+        let fill = protocolCommandDefinition(for: .fill)
+        let sensitiveParameters = fill.parameters.filter(\.sensitive).map(\.name)
+        try expect(sensitiveParameters == ["value"], "fill value sensitivity must be machine-readable")
+        let authentication = protocolCommandDefinition(for: .authLogin)
+        try expect(
+            Set(authentication.parameters.map(\.name)) == ["challenge", "account", "interactive"],
+            "authentication schema must expose aliases and challenge identifiers only"
+        )
+        try expect(
+            authentication.parameters.allSatisfy { !$0.sensitive },
+            "authentication schema must never define a password parameter"
+        )
+        let screenshotFormat = protocolCommandDefinition(for: .screenshot).parameters
+            .first { $0.name == "format" }
+        try expect(
+            screenshotFormat?.values == ["png", "jpg", "jpeg", "pdf"],
+            "the schema must expose every accepted screenshot spelling"
+        )
+        try expect(
+            screenshotFormat?.caseInsensitiveValues == true,
+            "the schema must preserve case-insensitive screenshot formats"
+        )
+        let recordingQuality = protocolCommandDefinition(for: .recordStart).parameters
+            .first { $0.name == "quality" }
+        try expect(
+            recordingQuality?.values == RecordingQuality.allCases.map(\.rawValue),
+            "the schema must derive recording quality values from the parser enum"
+        )
+        try expect(
+            recordingQuality?.caseInsensitiveValues == true,
+            "the schema must preserve case-insensitive recording quality values"
+        )
+        try expect(
+            protocolErrorCodes.contains(AuthenticationError.challengeExpired.code)
+                && protocolErrorCodes.contains("INVALID_INPUT")
+                && protocolErrorCodes.contains("RESPONSE_TOO_LARGE"),
+            "the schema must include authentication, validation, and transport failures"
+        )
+
+        let schemaData = try ProtocolCodec.encoder.encode(protocolSchemaDocument)
+        try expect(
+            schemaData.count < headlessMaximumMessageBytes,
+            "the protocol schema must fit the protocol frame bound"
+        )
+        if let source = repositoryFile("sdk/protocol-schema.json") {
+            let golden = try Data(contentsOf: source)
+            try expect(
+                try ProtocolCodec.decoder.decode(JSONValue.self, from: golden) == protocolSchemaDocument,
+                "the checked-in SDK schema must match the Swift-owned contract"
+            )
+        } else if ProcessInfo.processInfo.environment["HEADLESS_REQUIRE_SDK_CONTRACT"] == "1" {
+            throw TestFailure(description: "required sdk/protocol-schema.json was not found")
+        }
+    }
+
+    static func sdkProtocolFixtures() throws {
+        guard let source = repositoryFile("sdk/protocol-fixtures.json") else {
+            if ProcessInfo.processInfo.environment["HEADLESS_REQUIRE_SDK_CONTRACT"] == "1" {
+                throw TestFailure(description: "required sdk/protocol-fixtures.json was not found")
+            }
+            return
+        }
+        let document = try ProtocolCodec.decoder.decode(
+            JSONValue.self, from: Data(contentsOf: source)
+        )
+        guard case .object(let root) = document,
+              root["schemaVersion"] == .number(Double(headlessProtocolSchemaVersion)),
+              root["protocolVersion"] == .string(headlessProtocolVersion),
+              case .array(let cases)? = root["cases"],
+              case .array(let directRequests)? = root["directRequests"],
+              case .array(let invalidRequests)? = root["invalidRequests"] else {
+            throw TestFailure(description: "SDK fixture envelope is invalid")
+        }
+
+        for fixture in cases {
+            guard case .object(let fields) = fixture,
+                  case .array(let rawArguments)? = fields["argv"],
+                  case .object? = fields["request"],
+                  let requestValue = fields["request"],
+                  let responseValue = fields["response"] else {
+                throw TestFailure(description: "SDK fixture case is invalid")
+            }
+            let arguments = rawArguments.compactMap(\.stringValue)
+            try expect(arguments.count == rawArguments.count, "fixture argv must contain strings")
+            let request = try ProtocolCodec.decoder.decode(
+                CommandRequest.self, from: ProtocolCodec.encoder.encode(requestValue)
+            )
+            try request.validate()
+            let invocation = try CLIParser().parse(arguments)
+            guard let parsed = invocation.request else {
+                throw TestFailure(description: "fixture argv did not produce a wire request")
+            }
+            try expect(parsed.command == request.command, "fixture CLI command drifted")
+            try expect(parsed.session == request.session, "fixture CLI session drifted")
+            try expect(parsed.parameters == request.parameters, "fixture CLI parameters drifted")
+
+            let response = try ProtocolCodec.decoder.decode(
+                CommandResponse.self, from: ProtocolCodec.encoder.encode(responseValue)
+            )
+            try expect(response.id == request.id, "fixture response id drifted")
+            try expect(response.version == headlessProtocolVersion, "fixture response version drifted")
+            guard response.ok, let result = response.result else {
+                throw TestFailure(description: "fixture success response is invalid")
+            }
+            try protocolResultDefinition(for: request.command).validate(result)
+        }
+
+        for value in directRequests {
+            let request = try ProtocolCodec.decoder.decode(
+                CommandRequest.self, from: ProtocolCodec.encoder.encode(value)
+            )
+            try request.validate()
+        }
+        for value in invalidRequests {
+            let request = try ProtocolCodec.decoder.decode(
+                CommandRequest.self, from: ProtocolCodec.encoder.encode(value)
+            )
+            try expectThrows("invalid SDK fixture request was accepted") { try request.validate() }
+        }
+    }
+
+    static func supervisedHostOwnerPipe() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        process.arguments = ["--supervised-owner-child"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HEADLESS_SUPERVISED"] = "1"
+        process.environment = environment
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        try process.run()
+        defer {
+            if process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+        try expect(process.isRunning, "a supervised host must stay alive while its owner pipe is open")
+        try input.fileHandleForWriting.close()
+        try expect(
+            finished.wait(timeout: .now() + 3) == .success,
+            "a supervised host must stop when its owner pipe closes"
+        )
+        let marker = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        )
+        try expect(
+            process.terminationStatus == 0 && marker.contains("owner-closed"),
+            "the supervised owner monitor did not perform an orderly shutdown"
+        )
     }
 
     static func oversizedSocketRequestIsRejected() throws {
@@ -3771,6 +4017,21 @@ struct ProtocolTests {
     }
 
     static func main() {
+        if CommandLine.arguments.count == 2,
+           CommandLine.arguments[1] == "--supervised-owner-child" {
+            let stopped = DispatchSemaphore(value: 0)
+            guard let monitor = SupervisedHostOwnerMonitor.startIfRequested(onOwnerExit: {
+                print("owner-closed")
+                fflush(stdout)
+                stopped.signal()
+            }) else {
+                fputs("supervision was not enabled\n", stderr)
+                exit(1)
+            }
+            stopped.wait()
+            monitor.stop()
+            exit(0)
+        }
         if CommandLine.arguments.count == 3,
            CommandLine.arguments[1] == "--peer-denied-client" {
             do {
@@ -3828,6 +4089,9 @@ struct ProtocolTests {
             ("visual comparison", visualComparisonInvokesBoundedTool),
             ("recording arguments and bounds", recordingArgumentsAndFailureBounds),
             ("capabilities match commands", capabilitiesMatchProtocolCommands),
+            ("SDK protocol schema contract", sdkProtocolSchemaContract),
+            ("SDK protocol fixtures", sdkProtocolFixtures),
+            ("supervised host owner pipe", supervisedHostOwnerPipe),
             ("screenshot series helpers", screenshotSeriesHelpers),
             ("diagnostic summary", diagnosticSummary),
             ("diagnostic bounds and URL redaction", diagnosticsBoundAndRedacted),

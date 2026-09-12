@@ -59,8 +59,10 @@ if [[ -z "${SDKROOT:-}" ]]; then
   for sdk in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk(NOn); do
     if swiftc -module-cache-path build/module-cache -sdk "$sdk" \
         -target "$NATIVE_ARCH-apple-macos13.0" -typecheck \
-        Sources/HeadlessProtocol/Protocol.swift \
-        Sources/HeadlessProtocol/CredentialCommands.swift \
+      Sources/HeadlessProtocol/Protocol.swift \
+      Sources/HeadlessProtocol/ProtocolSchema.swift \
+      Sources/HeadlessProtocol/SupervisedHost.swift \
+      Sources/HeadlessProtocol/CredentialCommands.swift \
         Sources/HeadlessProtocol/HostError.swift \
         Sources/HeadlessProtocol/CaptureFormats.swift \
         Sources/HeadlessProtocol/NavigationAllowlist.swift >/dev/null 2>&1; then

@@ -185,6 +185,10 @@ public let capabilitiesDocument: JSONValue = {
         .sorted()
     return .object([
         "protocolVersion": .string(headlessProtocolVersion),
+        "protocolSchema": .object([
+            "command": .string("schema"),
+            "schemaVersion": .number(Double(headlessProtocolSchemaVersion)),
+        ]),
         "transport": stringArray(["local-unix-socket"]),
         "currentEngine": .string(currentBrowserEngineCapabilities.engine.rawValue),
         "commands": .array(CommandName.allCases.map { .string($0.rawValue) }),
@@ -207,6 +211,7 @@ public let capabilitiesDocument: JSONValue = {
         "localCommands": stringArray([
             "config.describe", "config.get", "config.list", "config.reset", "config.set",
             "credentials.add", "credentials.list", "credentials.remove", "credentials.rename",
+            "schema",
         ]),
         "settings": .object([
             "definitions": .array(SettingsRegistry.shared.definitions.compactMap { definition in

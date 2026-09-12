@@ -22,6 +22,12 @@ private func printResponse(_ response: CommandResponse) throws {
 }
 
 private struct HostLauncher {
+    struct Launch {
+        let response: CommandResponse
+        let process: Process?
+        let ownerHandle: FileHandle?
+    }
+
     let client = LocalSocketClient()
 
     func ping() -> CommandResponse? {
@@ -30,14 +36,16 @@ private struct HostLauncher {
 
     func start(
         presentation: AgentStartupPresentation? = nil,
-        allowlist: NavigationAllowlist = .unrestricted
-    ) throws -> CommandResponse {
+        allowlist: NavigationAllowlist = .unrestricted,
+        supervised: Bool = false
+    ) throws -> Launch {
         #if !os(macOS)
         if presentation != nil { throw SettingsError.unsupportedPlatform("startup-presentation") }
         #endif
         if let response = ping(), response.ok {
+            if supervised { throw HostLaunchError.alreadyRunning }
             try validateRunningAllowlist(response, requested: allowlist)
-            return response
+            return Launch(response: response, process: nil, ownerHandle: nil)
         }
         #if os(Linux)
         // Report an unsupported browser directly to the operator instead of
@@ -60,13 +68,15 @@ private struct HostLauncher {
         let effectivePresentation = AgentStartupPresentation.background
         #endif
         environment["HEADLESS_START_FOREGROUND"] = effectivePresentation == .foreground ? "1" : "0"
+        environment["HEADLESS_SUPERVISED"] = supervised ? "1" : "0"
         if allowlist.isRestricted {
             environment[headlessNavigationAllowlistEnvironmentKey] = allowlist.environmentValue
         } else {
             environment.removeValue(forKey: headlessNavigationAllowlistEnvironmentKey)
         }
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        let ownerPipe = supervised ? Pipe() : nil
+        process.standardInput = ownerPipe?.fileHandleForReading ?? FileHandle.nullDevice
         if let hostLog = environment["HEADLESS_HOST_LOG"], hostLog.hasPrefix("/") {
             let logURL = URL(fileURLWithPath: hostLog)
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
@@ -77,25 +87,90 @@ private struct HostLauncher {
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
         }
-        try process.run()
+        do {
+            try process.run()
+            try ownerPipe?.fileHandleForReading.close()
+        } catch {
+            try? ownerPipe?.fileHandleForReading.close()
+            try? ownerPipe?.fileHandleForWriting.close()
+            throw error
+        }
 
         let deadline = Date().addingTimeInterval(8)
         repeat {
             if let response = ping(), response.ok {
                 do {
                     try validateRunningAllowlist(response, requested: allowlist)
-                    return response
+                    if supervised, runningHostProcessIdentifier(response) != process.processIdentifier {
+                        throw HostLaunchError.ownershipMismatch
+                    }
+                    return Launch(
+                        response: response, process: supervised ? process : nil,
+                        ownerHandle: ownerPipe?.fileHandleForWriting
+                    )
                 } catch {
-                    process.terminate()
+                    try? ownerPipe?.fileHandleForWriting.close()
+                    terminateAndReap(process)
                     throw error
                 }
             }
             if !process.isRunning {
+                try? ownerPipe?.fileHandleForWriting.close()
+                process.waitUntilExit()
                 throw HostLaunchError.exited(process.terminationStatus)
             }
             Thread.sleep(forTimeInterval: 0.05)
         } while Date() < deadline
+        try? ownerPipe?.fileHandleForWriting.close()
+        terminateAndReap(process)
         throw HostLaunchError.timedOut
+    }
+
+    func waitForSupervisedHost(_ launch: Launch) -> Int32 {
+        guard let process = launch.process, let ownerHandle = launch.ownerHandle else {
+            return 0
+        }
+        while process.isRunning {
+            var descriptor = pollfd(
+                fd: STDIN_FILENO,
+                events: Int16(POLLIN | POLLHUP | POLLERR),
+                revents: 0
+            )
+            let status = poll(&descriptor, 1, 100)
+            if status > 0 {
+                var byte: UInt8 = 0
+                let count = withUnsafeMutableBytes(of: &byte) { buffer in
+                    read(STDIN_FILENO, buffer.baseAddress, 1)
+                }
+                if count >= 0 || errno != EINTR { break }
+            } else if status < 0, errno != EINTR {
+                break
+            }
+        }
+        try? ownerHandle.close()
+        let gracefulDeadline = Date().addingTimeInterval(3)
+        while process.isRunning, Date() < gracefulDeadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning { terminateAndReap(process) }
+        else { process.waitUntilExit() }
+        return process.terminationStatus
+    }
+
+    private func terminateAndReap(_ process: Process) {
+        guard process.isRunning else {
+            process.waitUntilExit()
+            return
+        }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(3)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
     }
 
     private func validateRunningAllowlist(
@@ -114,6 +189,17 @@ private struct HostLauncher {
             return []
         }
         return values.compactMap(\.stringValue)
+    }
+
+    private func runningHostProcessIdentifier(_ response: CommandResponse) -> Int32? {
+        guard case .object(let result) = response.result,
+              let value = result["pid"]?.numberValue,
+              value.rounded() == value,
+              value >= 1,
+              value <= Double(Int32.max) else {
+            return nil
+        }
+        return Int32(value)
     }
 
     private func resolveHostExecutable() throws -> URL {
@@ -144,6 +230,8 @@ private struct HostLauncher {
 
 private enum HostLaunchError: Error, CustomStringConvertible {
     case notFound
+    case alreadyRunning
+    case ownershipMismatch
     case timedOut
     case exited(Int32)
     case allowlistMismatch(running: [String], requested: [String])
@@ -151,6 +239,10 @@ private enum HostLaunchError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .notFound: return "Could not find headless-host. Run the Headless build first."
+        case .alreadyRunning:
+            return "A shared Headless host is already running. Stop it before starting a supervised host."
+        case .ownershipMismatch:
+            return "A different Headless host answered during supervised startup."
         case .timedOut: return "Headless host did not become ready within 8 seconds."
         case .exited(let status): return "Headless host exited during startup (status \(status))."
         case .allowlistMismatch(let running, let requested):
@@ -239,6 +331,8 @@ do {
             print("headless \(headlessProductVersion)")
         case .capabilities:
             printJSON(capabilitiesDocument)
+        case .schema:
+            printJSON(protocolSchemaDocument)
         case .runtime:
             #if os(Linux)
             printJSON(try ChromiumRuntimeResolver().resolve().diagnostic)
@@ -248,8 +342,12 @@ do {
                 "supported": .bool(true), "transport": .string("native-webkit"),
             ]))
             #endif
-        case .start(let presentation, let allowlist):
-            try printResponse(try HostLauncher().start(presentation: presentation, allowlist: allowlist))
+        case .start(let presentation, let allowlist, let supervised):
+            let launch = try HostLauncher().start(
+                presentation: presentation, allowlist: allowlist, supervised: supervised
+            )
+            try printResponse(launch.response)
+            if launch.process != nil { exit(HostLauncher().waitForSupervisedHost(launch)) }
         case .config(let command):
             let settings = try SettingsStore.production()
             switch command {
